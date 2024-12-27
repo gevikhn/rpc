@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <type_traits>
+#include <iostream>
 
 namespace rpc {
 namespace serialization {
@@ -206,11 +207,12 @@ namespace serialization {
             } else if constexpr (std::is_same_v<T, std::string>) {
                 DataType type = DataType::STRING;
                 size_t len = value.size();
+                uint32_t len_fixed = static_cast<uint32_t>(len);
                 size_t old_size = buffer.size();
-                buffer.resize(old_size + sizeof(DataType) + sizeof(size_t) + len);
+                buffer.resize(old_size + sizeof(DataType) + sizeof(uint32_t) + len);
                 memcpy(buffer.data() + old_size, &type, sizeof(DataType));
-                memcpy(buffer.data() + old_size + sizeof(DataType), &len, sizeof(size_t));
-                memcpy(buffer.data() + old_size + sizeof(DataType) + sizeof(size_t), value.data(), len);
+                memcpy(buffer.data() + old_size + sizeof(DataType), &len_fixed, sizeof(uint32_t));
+                memcpy(buffer.data() + old_size + sizeof(DataType) + sizeof(uint32_t), value.data(), len);
             } else if constexpr (std::is_array_v<T> || is_std_array_v<T>) {
                 using Traits = array_traits<T>;
                 using ElementType = typename Traits::element_type;
@@ -277,5 +279,143 @@ namespace serialization {
             
             return buffer;
         }
+
+        // 反序列化接口
+    class Deserializer {
+    public:
+        Deserializer(const std::vector<uint8_t>& buffer)
+            : buffer_(buffer), position_(0) {}
+
+        template<typename T>
+        T deserialize_value() {
+            if (position_ >= buffer_.size()) {
+                throw std::runtime_error("Buffer underflow");
+            }
+
+            DataType type;
+            std::memcpy(&type, buffer_.data() + position_, sizeof(DataType));
+            position_ += sizeof(DataType);
+
+            
+
+
+            if constexpr (std::is_arithmetic_v<T>) {
+                validate_type(type, get_data_type<T>());
+                T value;
+                std::memcpy(&value, buffer_.data() + position_, sizeof(T));
+                position_ += sizeof(T);
+                return value;
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                validate_type(type, DataType::STRING);
+                uint32_t  length;
+                std::memcpy(&length, buffer_.data() + position_, sizeof(uint32_t));
+                position_ += sizeof(uint32_t);
+
+                // 调试输出
+                std::cout << "Deserialized string length: " << length << std::endl;
+
+                // 检查长度合法性
+                if (position_ + length > buffer_.size()) {
+                    throw std::runtime_error("String length exceeds buffer size");
+                }
+
+                std::string value(reinterpret_cast<const char*>(buffer_.data() + position_), length);
+                position_ += length;
+                return value;
+            } else {
+                throw std::runtime_error("Unsupported type for deserialization");
+            }
+        }
+
+        template<typename T>
+        std::vector<T> deserialize_vector() {
+            if (position_ >= buffer_.size()) {
+                throw std::runtime_error("Buffer underflow");
+            }
+
+            DataType type;
+            std::memcpy(&type, buffer_.data() + position_, sizeof(DataType));
+            position_ += sizeof(DataType);
+
+            validate_vector_type<T>(type);
+
+            uint32_t length;
+            std::memcpy(&length, buffer_.data() + position_, sizeof(uint32_t));
+            position_ += sizeof(uint32_t);
+
+            std::vector<T> vec(length);
+            std::memcpy(vec.data(), buffer_.data() + position_, length * sizeof(T));
+            position_ += length * sizeof(T);
+            return vec;
+        }
+
+        template<typename... Args>
+        std::tuple<Args...> deserialize_tuple() {
+            return deserialize_tuple_impl<std::tuple<Args...>>(std::index_sequence_for<Args...>{});
+        }
+
+    private:
+        const std::vector<uint8_t>& buffer_;
+        size_t position_;
+
+        template<typename T>
+        constexpr DataType get_data_type() {
+            if constexpr (std::is_same_v<T, uint8_t>) return DataType::UINT8;
+            else if constexpr (std::is_same_v<T, int8_t>) return DataType::SINT8;
+            else if constexpr (std::is_same_v<T, uint16_t>) return DataType::UINT16;
+            else if constexpr (std::is_same_v<T, int16_t>) return DataType::SINT16;
+            else if constexpr (std::is_same_v<T, uint32_t>) return DataType::UINT32;
+            else if constexpr (std::is_same_v<T, int32_t>) return DataType::SINT32;
+            else if constexpr (std::is_same_v<T, uint64_t>) return DataType::UINT64;
+            else if constexpr (std::is_same_v<T, int64_t>) return DataType::SINT64;
+            else if constexpr (std::is_same_v<T, float>) return DataType::FLOAT32;
+            else if constexpr (std::is_same_v<T, double>) return DataType::FLOAT64;
+            else static_assert(!std::is_same_v<T, T>, "Unsupported type");
+        }
+
+        template<typename T>
+        constexpr DataType get_vector_data_type() {
+            if constexpr (std::is_same_v<T, uint8_t>) return DataType::VECTOR_UINT8;
+            else if constexpr (std::is_same_v<T, int8_t>) return DataType::VECTOR_SINT8;
+            else if constexpr (std::is_same_v<T, uint16_t>) return DataType::VECTOR_UINT16;
+            else if constexpr (std::is_same_v<T, int16_t>) return DataType::VECTOR_SINT16;
+            else if constexpr (std::is_same_v<T, uint32_t>) return DataType::VECTOR_UINT32;
+            else if constexpr (std::is_same_v<T, int32_t>) return DataType::VECTOR_SINT32;
+            else if constexpr (std::is_same_v<T, uint64_t>) return DataType::VECTOR_UINT64;
+            else if constexpr (std::is_same_v<T, int64_t>) return DataType::VECTOR_SINT64;
+            else if constexpr (std::is_same_v<T, float>) return DataType::VECTOR_FLOAT32;
+            else if constexpr (std::is_same_v<T, double>) return DataType::VECTOR_FLOAT64;
+            else static_assert(!std::is_same_v<T, T>, "Unsupported vector element type");
+        }
+
+        void validate_type(DataType actual, DataType expected) {
+            if (actual != expected) {
+                throw std::runtime_error("Data type mismatch during deserialization");
+            }
+        }
+
+        template<typename T>
+        void validate_vector_type(DataType actual) {
+            if (actual != get_vector_data_type<T>()) {
+                throw std::runtime_error("Vector data type mismatch during deserialization");
+            }
+        }
+
+        template<typename Tuple, size_t... Is>
+        Tuple deserialize_tuple_impl(std::index_sequence<Is...>) {
+            return Tuple{deserialize_element<std::tuple_element_t<Is, Tuple>>()...};
+        }
+
+        template<typename T>
+        T deserialize_element() {
+            if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string>) {
+                return deserialize_value<T>();
+            } else if constexpr (std::is_same_v<T, std::vector<typename T::value_type>>) {
+                return deserialize_vector<typename T::value_type>();
+            } else {
+                static_assert(!std::is_same_v<T, T>, "Unsupported element type for deserialization");
+            }
+        }
+    };
     }
 }
