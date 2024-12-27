@@ -1,4 +1,4 @@
-#include "rpc_server.hpp"
+#include "rpc_provider.hpp"
 #include <iostream>
 #include <sstream>
 
@@ -12,7 +12,7 @@ std::string greet(std::string name, int age) {
 }
 
 int main() {
-    rpc::RpcServer server;
+    rpc::RpcProvider server;
 
     // 使用宏自动注册函数和参数名
     REGISTER_FUNCTION(server, "add", add, a, b);  // 直接使用参数名

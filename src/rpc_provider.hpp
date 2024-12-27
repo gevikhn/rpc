@@ -26,26 +26,9 @@
 #include <thread>
 #include <sstream>
 #include <cctype>
+#include "json.hpp"
 
 namespace rpc {
-    namespace detail {
-        // 分割字符串
-        inline std::vector<std::string> split(const std::string& s, char delimiter) {
-            std::vector<std::string> tokens;
-            std::string token;
-            std::istringstream tokenStream(s);
-            while (std::getline(tokenStream, token, delimiter)) {
-                // 去除空格
-                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
-                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
-                if (!token.empty()) {
-                    tokens.push_back(token);
-                }
-            }
-            return tokens;
-        }
-    }
-
     // 自定义异常类
     class RpcException : public std::runtime_error {
     public:
@@ -65,7 +48,90 @@ namespace rpc {
         ErrorType type_;
     };
 
-    class RpcServer {
+    // 获取可读的类型名称
+    inline std::string demangle(const char* name) {
+        int status;
+        char* demangled = abi::__cxa_demangle(name, nullptr, nullptr, &status);
+        if (status == 0) {
+            std::string result(demangled);
+            free(demangled);
+            return result;
+        }
+        return name;
+    }
+
+    namespace detail {
+        // 类型转换辅助函数
+        template<typename T>
+        std::any json_to_any(const nlohmann::json& j) {
+            if constexpr (std::is_same_v<T, int>) {
+                return std::make_any<int>(j.get<int>());
+            } else if constexpr (std::is_same_v<T, long>) {
+                return std::make_any<long>(j.get<long>());
+            } else if constexpr (std::is_same_v<T, float>) {
+                return std::make_any<float>(j.get<float>());
+            } else if constexpr (std::is_same_v<T, double>) {
+                return std::make_any<double>(j.get<double>());
+            } else if constexpr (std::is_same_v<T, bool>) {
+                return std::make_any<bool>(j.get<bool>());
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                return std::make_any<std::string>(j.get<std::string>());
+            } else if constexpr (std::is_same_v<T, std::vector<int>>) {
+                return std::make_any<std::vector<int>>(j.get<std::vector<int>>());
+            } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+                return std::make_any<std::vector<std::string>>(j.get<std::vector<std::string>>());
+            } else {
+                throw RpcException(
+                    RpcException::ErrorType::TYPE_MISMATCH,
+                    "Unsupported type conversion from JSON"
+                );
+            }
+        }
+
+        // 类型转换函数
+        std::any convert_json_to_any(const nlohmann::json& j, const std::type_info& type) {
+            if (type == typeid(int)) {
+                return json_to_any<int>(j);
+            } else if (type == typeid(long)) {
+                return json_to_any<long>(j);
+            } else if (type == typeid(float)) {
+                return json_to_any<float>(j);
+            } else if (type == typeid(double)) {
+                return json_to_any<double>(j);
+            } else if (type == typeid(bool)) {
+                return json_to_any<bool>(j);
+            } else if (type == typeid(std::string)) {
+                return json_to_any<std::string>(j);
+            } else if (type == typeid(std::vector<int>)) {
+                return json_to_any<std::vector<int>>(j);
+            } else if (type == typeid(std::vector<std::string>)) {
+                return json_to_any<std::vector<std::string>>(j);
+            } else {
+                throw RpcException(
+                    RpcException::ErrorType::TYPE_MISMATCH,
+                    "Unsupported type: " + demangle(type.name())
+                );
+            }
+        }
+
+        // 分割字符串
+        inline std::vector<std::string> split(const std::string& s, char delimiter) {
+            std::vector<std::string> tokens;
+            std::string token;
+            std::istringstream tokenStream(s);
+            while (std::getline(tokenStream, token, delimiter)) {
+                // 去除空格
+                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
+                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
+                if (!token.empty()) {
+                    tokens.push_back(token);
+                }
+            }
+            return tokens;
+        }
+    }
+
+    class RpcProvider {
     public:
         // 存储函数签名信息的结构
         struct FunctionInfo {
@@ -75,18 +141,6 @@ namespace rpc {
             std::function<std::any(const std::vector<std::any>&)> func;
             std::chrono::milliseconds timeout{5000};
         };
-
-        // 获取可读的类型名称
-        static std::string demangle(const char* name) {
-            int status;
-            char* demangled = abi::__cxa_demangle(name, nullptr, nullptr, &status);
-            if (status == 0) {
-                std::string result(demangled);
-                free(demangled);
-                return result;
-            }
-            return name;
-        }
 
         // 注册函数
         template <typename Ret, typename... Args>
@@ -125,9 +179,9 @@ namespace rpc {
             functions[name] = std::move(info);
         }
 
-        // 通过命名参数调用函数
+        // 通过 JSON 进行命名参数调用
         template <typename Ret>
-        Ret call_function_named(const std::string& name, const std::map<std::string, std::any>& named_args) {
+        Ret call_function_named(const std::string& name, const nlohmann::json& named_args) {
             auto it = functions.find(name);
             if (it == functions.end()) {
                 throw RpcException(
@@ -154,24 +208,26 @@ namespace rpc {
 
             for (size_t i = 0; i < info.paramNames.size(); ++i) {
                 const auto& param_name = info.paramNames[i];
-                auto arg_it = named_args.find(param_name);
                 
-                if (arg_it == named_args.end()) {
+                // 检查参数是否存在
+                if (!named_args.contains(param_name)) {
                     throw RpcException(
                         RpcException::ErrorType::ARGUMENT_ERROR,
                         "Missing argument: " + param_name
                     );
                 }
 
-                // 类型检查
-                if (arg_it->second.type() != *info.paramTypes[i]) {
+                try {
+                    // 转换参数类型
+                    ordered_args.push_back(
+                        detail::convert_json_to_any(named_args[param_name], *info.paramTypes[i])
+                    );
+                } catch (const nlohmann::json::exception& e) {
                     throw RpcException(
                         RpcException::ErrorType::TYPE_MISMATCH,
-                        "Type mismatch for parameter '" + param_name + "'"
+                        "JSON conversion error for parameter '" + param_name + "': " + e.what()
                     );
                 }
-
-                ordered_args.push_back(arg_it->second);
             }
 
             try {

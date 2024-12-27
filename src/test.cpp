@@ -6,7 +6,7 @@
 #include <vector>
 #include <tuple>
 
-class RpcServer {
+class RpcProvider {
 public:
     // 注册函数
     template <typename Ret, typename... Args>
@@ -43,7 +43,7 @@ private:
 };
 
 int main() {
-    RpcServer server;
+    RpcProvider server;
 
     // 注册一个函数
     server.register_function<int, int, int>("add", std::function<int(int, int)>([](int a, int b) { return a + b; }));

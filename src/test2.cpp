@@ -16,12 +16,8 @@
 #include <variant>
 #include <future>
 #include <thread>
-#include "rpc_server.hpp"
+#include "rpc_provider.hpp"
 using namespace rpc;
-
-
-
-
 
 // 测试用的慢函数
 std::string slow_concatenate(std::string str1, std::string str2) {
@@ -207,7 +203,7 @@ std::array<std::array<std::array<int, 2>, 2>, 2> wrapped_rotate_3d_array(
 }
 
 int main() {
-    RpcServer server;
+    RpcProvider server;
 
     // 注册基本类型函数
 
